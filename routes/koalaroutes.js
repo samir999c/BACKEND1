@@ -12,35 +12,41 @@ const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
 //
-// FIXED: This function now generates the signature correctly.
-// The API requires parameters in a specific, non-alphabetical order.
+// ## CRITICAL FIX ##
+// This function now generates the signature by sorting keys alphabetically,
+// as required by the Travelpayouts documentation to resolve the authentication error.
 //
 function generateSignature(params, token) {
-  const flattenValues = [];
+  const values = [];
 
-  // **IMPORTANT**: The order of these values MUST match the API's requirements.
-  flattenValues.push(params.marker);
-  flattenValues.push(params.host);
-  flattenValues.push(params.user_ip);
-  flattenValues.push(params.locale);
-  flattenValues.push(params.trip_class);
+  // This recursive function will process all keys in alphabetical order
+  const processObject = (obj) => {
+    // Sort keys alphabetically
+    const sortedKeys = Object.keys(obj).sort();
 
-  // Add passenger counts in order: adults, children, infants
-  flattenValues.push(params.passengers.adults);
-  flattenValues.push(params.passengers.children);
-  flattenValues.push(params.passengers.infants);
+    for (const key of sortedKeys) {
+      const value = obj[key];
+      if (Array.isArray(value)) {
+        // If it's an array of objects (like segments), process each one
+        value.forEach(item => processObject(item));
+      } else if (typeof value === 'object' && value !== null) {
+        // If it's a nested object (like passengers), recurse
+        processObject(value);
+      } else {
+        // Otherwise, it's a simple value
+        values.push(value.toString());
+      }
+    }
+  };
 
-  // Add segment data in order: origin, destination, date for each segment
-  params.segments.forEach((seg) => {
-    flattenValues.push(seg.origin);
-    flattenValues.push(seg.destination);
-    flattenValues.push(seg.date);
-  });
+  processObject(params);
 
-  const stringToHash = `${token}:${flattenValues.join(":")}`;
+  const valuesString = values.join(":");
+  const stringToHash = `${token}:${valuesString}`;
 
   return crypto.createHash("md5").update(stringToHash).digest("hex");
 }
+
 
 // Helper to safely parse API JSON responses
 async function safeJsonParse(response) {
@@ -66,7 +72,7 @@ router.get("/dashboard", authMiddleware, (req, res) => {
   res.json({ msg: "Welcome back!", userId: req.user.id });
 });
 
-// Flight search endpoint 
+// Flight search endpoint
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
     if (!TOKEN || !MARKER) {
@@ -76,12 +82,13 @@ router.post("/flights", authMiddleware, async (req, res) => {
       });
     }
 
+    // Note: The 'currency' parameter is received but NOT sent to Travelpayouts
     const {
       origin,
       destination,
       departure_at,
       return_at,
-      currency = "usd",
+      currency = "usd", // Used for post-processing only
       passengers = 1,
       trip_class = "Y",
     } = req.body;
@@ -107,29 +114,35 @@ router.post("/flights", authMiddleware, async (req, res) => {
         date: return_at,
       });
     }
-
-    const requestParams = {
+    
+    // ## CRITICAL FIX ##
+    // This is the object that will be used to generate the signature.
+    // It MUST NOT contain any extra parameters like 'currency'.
+    const paramsForSignature = {
       marker: MARKER,
       host: req.headers.host || "localhost",
       user_ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
       locale: "en",
       trip_class: trip_class.toUpperCase(),
       passengers: {
-        adults: parseInt(passengers) || 1, // Ensure it's at least 1
+        adults: parseInt(passengers) || 1,
         children: 0,
         infants: 0,
       },
       segments: segments,
     };
-
-    // Generate the essential signature
-    requestParams.signature = generateSignature(requestParams, TOKEN);
+    
+    // This is the actual payload we send to the API. It includes the signature.
+    const requestPayload = {
+        ...paramsForSignature,
+        signature: generateSignature(paramsForSignature, TOKEN),
+    }
 
     // STEP 1: Initialize the search
     const searchResponse = await fetch(SEARCH_API, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Access-Token": TOKEN },
-      body: JSON.stringify(requestParams),
+      body: JSON.stringify(requestPayload),
     });
 
     if (searchResponse.status === 401) {
@@ -161,15 +174,12 @@ router.post("/flights", authMiddleware, async (req, res) => {
       });
 
       const resultsData = await safeJsonParse(resultsResponse);
-      
-      // Check if the response contains actual flight data
-      // The API sends back `search_id` while it's still working.
-      // A successful result is an array of flight objects.
+
       if (
         resultsResponse.ok &&
         Array.isArray(resultsData) &&
         resultsData.length > 0 &&
-        !resultsData[0].search_id
+        !resultsData[0].search_id // This confirms we have actual flight data
       ) {
         results = resultsData;
         break; // Exit the loop once we have results
@@ -183,8 +193,7 @@ router.post("/flights", authMiddleware, async (req, res) => {
     }
 
     // STEP 3: Process and send the results
-    // NOTE: For a real app, use a currency API. These rates are examples.
-    const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 };
+    const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 }; // Example rates
     const processedResults = results.map((flight) => {
       const rate = conversionRates[currency.toLowerCase()] || 1;
       return {
@@ -197,7 +206,6 @@ router.post("/flights", authMiddleware, async (req, res) => {
 
     res.json({ search_id: searchId, data: processedResults });
   } catch (err) {
-    // CLEANED: Simplified and more effective error handling
     console.error("Flight API Error:", err.message);
     res
       .status(err.message.includes("authentication") ? 401 : 500)
@@ -209,7 +217,6 @@ router.post("/flights", authMiddleware, async (req, res) => {
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
-
     const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
       headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
     });
@@ -236,8 +243,7 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   }
 });
 
-// Health check and debug endpoints remain the same...
-
+// Health check and debug endpoints
 router.get("/health", async (req, res) => {
  try {
    if (!TOKEN || !MARKER) {
