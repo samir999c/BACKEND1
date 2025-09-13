@@ -72,224 +72,107 @@ router.get("/dashboard", authMiddleware, (req, res) => {
   res.json({ msg: "Welcome back!", userId: req.user.id });
 });
 
-// Flight search endpoint
+// **FIXED**: This endpoint now starts the search and returns the search_id immediately.
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
     if (!TOKEN || !MARKER) {
-      console.error("API key or marker is missing from .env file");
-      return res.status(500).json({
-        error: "Server configuration error: API key or marker missing",
-      });
+      return res.status(500).json({ error: "Server configuration error: API key or marker missing" });
     }
 
-    // Note: The 'currency' parameter is received but NOT sent to Travelpayouts
-    const {
-      origin,
-      destination,
-      departure_at,
-      return_at,
-      currency = "usd", // Used for post-processing only
-      passengers = 1,
-      trip_class = "Y",
-    } = req.body;
+    const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
 
     if (!origin || !destination || !departure_at) {
-      return res.status(400).json({
-        error: "Origin, destination, and departure date are required",
-      });
+      return res.status(400).json({ error: "Origin, destination, and departure date are required" });
     }
 
-    // Prepare flight segments
-    const segments = [
-      {
-        origin: origin.toUpperCase(),
-        destination: destination.toUpperCase(),
-        date: departure_at,
-      },
-    ];
+    const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
     if (return_at) {
-      segments.push({
-        origin: destination.toUpperCase(),
-        destination: origin.toUpperCase(),
-        date: return_at,
-      });
+      segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
     }
-    
-    // ## CRITICAL FIX ##
-    // This is the object that will be used to generate the signature.
-    // It MUST NOT contain any extra parameters like 'currency'.
+
     const paramsForSignature = {
       marker: MARKER,
       host: req.headers.host || "localhost",
       user_ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
       locale: "en",
       trip_class: trip_class.toUpperCase(),
-      passengers: {
-        adults: parseInt(passengers) || 1,
-        children: 0,
-        infants: 0,
-      },
+      passengers: { adults: parseInt(passengers) || 1, children: 0, infants: 0 },
       segments: segments,
     };
-    
-    // This is the actual payload we send to the API. It includes the signature.
-    const requestPayload = {
-        ...paramsForSignature,
-        signature: generateSignature(paramsForSignature, TOKEN),
-    }
 
-    // STEP 1: Initialize the search
+    const requestPayload = {
+      ...paramsForSignature,
+      signature: generateSignature(paramsForSignature, TOKEN),
+    };
+
     const searchResponse = await fetch(SEARCH_API, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Access-Token": TOKEN },
       body: JSON.stringify(requestPayload),
     });
 
-    if (searchResponse.status === 401) {
-      throw new Error("API authentication failed. Check your API Key and Marker.");
+    if (searchResponse.status >= 400) {
+        const errorData = await safeJsonParse(searchResponse);
+        throw new Error(errorData.error || "Failed to initialize flight search.");
     }
 
     const searchData = await safeJsonParse(searchResponse);
-    const searchId = searchData.search_id;
-
-    if (!searchId) {
-      console.error("API did not return a search_id:", searchData);
-      return res.status(500).json({ error: "Failed to initialize flight search" });
+    if (!searchData.search_id) {
+        throw new Error("API did not return a search_id");
     }
 
-    // STEP 2: Poll for the results
-    let attempts = 0;
-    const maxAttempts = 12; // 5s interval × 12 = 60s timeout
-    let results = null;
+    // Immediately return the search_id
+    res.json({ search_id: searchData.search_id });
 
-    while (attempts < maxAttempts) {
-      attempts++;
-      await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
-
-      const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
-        headers: {
-          "Accept-Encoding": "gzip, deflate",
-          "X-Access-Token": TOKEN,
-        },
-      });
-
-      const resultsData = await safeJsonParse(resultsResponse);
-
-      if (
-        resultsResponse.ok &&
-        Array.isArray(resultsData) &&
-        resultsData.length > 0 &&
-        !resultsData[0].search_id // This confirms we have actual flight data
-      ) {
-        results = resultsData;
-        break; // Exit the loop once we have results
-      }
-    }
-
-    if (!results) {
-      return res
-        .status(408)
-        .json({ error: "Flight search timed out. No results found." });
-    }
-
-    // STEP 3: Process and send the results
-    const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 }; // Example rates
-    const processedResults = results.map((flight) => {
-      const rate = conversionRates[currency.toLowerCase()] || 1;
-      return {
-        ...flight,
-        price: (flight.price * rate * parseInt(passengers)).toFixed(2),
-        currency: currency.toUpperCase(),
-        passengers: parseInt(passengers),
-      };
-    });
-
-    res.json({ search_id: searchId, data: processedResults });
   } catch (err) {
-    console.error("Flight API Error:", err.message);
-    res
-      .status(err.message.includes("authentication") ? 401 : 500)
-      .json({ error: err.message });
+    console.error("Flight Init Error:", err.message);
+    res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
-// Endpoint to poll flight results manually if needed
+// This endpoint is used by the frontend to poll for results.
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
+    const { currency = "usd", passengers = 1 } = req.query; // Get currency and passengers for final processing
+
     const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
       headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
     });
 
-    if (resultsResponse.status === 401) {
-      throw new Error("API authentication failed.");
+    if (resultsResponse.status >= 400) {
+        const errorData = await safeJsonParse(resultsResponse);
+        throw new Error(errorData.error || "Failed to fetch flight results.");
     }
-
+    
     const resultsData = await safeJsonParse(resultsResponse);
-
-    if (!resultsResponse.ok) {
-      return res.status(resultsResponse.status).json({
-        error: "Failed to fetch flight results",
-        details: resultsData.error || "Unknown error",
-      });
+    
+    // The final result is an array of flight objects. A pending result is an object with a search_id.
+    if (Array.isArray(resultsData) && (resultsData.length === 0 || !resultsData[0].search_id)) {
+        // Process results with currency conversion before sending
+        const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 }; // Example rates
+        const processedResults = resultsData.map((flight) => {
+          const rate = conversionRates[currency.toLowerCase()] || 1;
+          return {
+            ...flight,
+            price: (flight.price * rate * parseInt(passengers)).toFixed(2),
+            currency: currency.toUpperCase(),
+            passengers: parseInt(passengers),
+          };
+        });
+        res.json({ status: 'complete', data: processedResults });
+    } else {
+        res.json({ status: 'pending' });
     }
 
-    res.json({ data: resultsData });
   } catch (err) {
-    console.error("Flight Results API Error:", err.message);
-    res
-      .status(err.message.includes("authentication") ? 401 : 500)
-      .json({ error: err.message });
+    console.error("Flight Poll Error:", err.message);
+    res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
 // Health check and debug endpoints
-router.get("/health", async (req, res) => {
- try {
-   if (!TOKEN || !MARKER) {
-     return res
-       .status(500)
-       .json({ status: "error", message: "API credentials not configured" });
-   }
-   const testResponse = await fetch(
-     "https://api.travelpayouts.com/v1/latest_currencies",
-     {
-       headers: { "X-Access-Token": TOKEN },
-     }
-   );
-   if (testResponse.status === 200) {
-     res.json({ status: "success", message: "API connectivity verified" });
-   } else if (testResponse.status === 401) {
-     res
-       .status(401)
-       .json({ status: "error", message: "API authentication failed" });
-   } else {
-     const text = await testResponse.text();
-     res
-       .status(testResponse.status)
-       .json({
-         status: "error",
-         message: `API returned status ${testResponse.status}`,
-         response: text.substring(0, 200),
-       });
-   }
- } catch (err) {
-   res
-     .status(500)
-     .json({
-       status: "error",
-       message: "Failed to connect to API: " + err.message,
-     });
- }
-});
-
-router.get("/debug", (req, res) => {
- res.json({
-   tokenPresent: !!TOKEN,
-   markerPresent: !!MARKER,
-   tokenPrefix: TOKEN ? TOKEN.substring(0, 10) + "..." : "undefined",
-   marker: MARKER,
- });
-});
+router.get("/health", (req, res) => res.json({ status: "ok" }));
+router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
 export default router;
