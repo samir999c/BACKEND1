@@ -66,7 +66,7 @@ router.get("/dashboard", authMiddleware, (req, res) => {
   res.json({ msg: "Welcome back!", userId: req.user.id });
 });
 
-// Flight search endpoint
+// Flight search endpoint 
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
     if (!TOKEN || !MARKER) {
