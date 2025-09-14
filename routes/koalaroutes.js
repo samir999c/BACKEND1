@@ -53,9 +53,8 @@ router.post("/flights", authMiddleware, async (req, res) => {
     if (!TOKEN || !MARKER) return res.status(500).json({ error: "API key or marker missing" });
 
     const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
-    if (!origin || !destination || !departure_at) {
+    if (!origin || !destination || !departure_at)
       return res.status(400).json({ error: "Origin, destination, and departure date are required" });
-    }
 
     const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
     if (return_at) segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
@@ -86,6 +85,7 @@ router.post("/flights", authMiddleware, async (req, res) => {
     const searchData = await safeJsonParse(searchResponse);
     if (!searchData.search_id) throw new Error("API did not return a search_id");
 
+    // Return search_id immediately
     res.json({ search_id: searchData.search_id });
   } catch (err) {
     console.error("Flight Init Error:", err.message);
@@ -93,16 +93,18 @@ router.post("/flights", authMiddleware, async (req, res) => {
   }
 });
 
-// Poll flight results using proposals and unified_price
+// Poll flight results with retries
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
     const { currency = "USD", passengers = 1 } = req.query;
 
+    const MAX_ATTEMPTS = 25;
+    const DELAY = 3000; // 3 seconds
     let attempts = 0;
     let resultsData = null;
 
-    while (attempts < 10) {
+    while (attempts < MAX_ATTEMPTS) {
       const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
         headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
       });
@@ -113,45 +115,44 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
       }
 
       resultsData = await safeJsonParse(resultsResponse);
-      console.log("Raw Travelpayouts Results:", JSON.stringify(resultsData, null, 2));
+      console.log("Attempt", attempts + 1, "Raw Results:", JSON.stringify(resultsData, null, 2));
 
-      // Check proposals array for actual flights
+      // proposals array contains actual flights
       const flightsArray = Array.isArray(resultsData.proposals) ? resultsData.proposals : [];
 
-      if (!flightsArray.length) {
-        attempts++;
-        await new Promise(r => setTimeout(r, 3000)); // wait 3 seconds
-        continue;
+      if (flightsArray.length) {
+        // Process flights safely
+        const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
+        const processedResults = flightsArray.map(flight => ({
+          airline: flight.airline || "N/A",
+          departure_at: flight.departure_at || "N/A",
+          return_at: flight.return_at || "N/A",
+          origin: flight.origin || "N/A",
+          destination: flight.destination || "N/A",
+          price: flight.unified_price
+            ? (flight.unified_price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2)
+            : "N/A",
+          currency: currency.toUpperCase(),
+          passengers: parseInt(passengers),
+        }));
+
+        return res.json({ status: "complete", data: processedResults });
       }
 
-      // Process flights safely
-      const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
-      const processedResults = flightsArray.map(flight => ({
-        airline: flight.airline || "N/A",
-        departure_at: flight.departure_at || "N/A",
-        return_at: flight.return_at || "N/A",
-        origin: flight.origin || "N/A",
-        destination: flight.destination || "N/A",
-        price: flight.unified_price
-          ? (flight.unified_price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2)
-          : "N/A",
-        currency: currency.toUpperCase(),
-        passengers: parseInt(passengers),
-      }));
-
-      return res.json({ status: "complete", data: processedResults });
+      // No results yet
+      attempts++;
+      await new Promise(r => setTimeout(r, DELAY));
     }
 
-    // If no flights after retries
+    // After max attempts
     res.json({ status: "pending", message: "Results not ready yet, try again shortly." });
-
   } catch (err) {
     console.error("Flight Poll Error:", err.message);
     res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
-// Health check and debug endpoints
+// Health check
 router.get("/health", (req, res) => res.json({ status: "ok" }));
 router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
