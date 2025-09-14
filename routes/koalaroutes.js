@@ -10,9 +10,8 @@ const SEARCH_API = "https://api.travelpayouts.com/v1/flight_search";
 const RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
-const HOST = process.env.AVIASALES_HOST; // Your live backend host
 
-// Generate signature required by Travelpayouts
+// Generate signature for Travelpayouts
 function generateSignature(params, token) {
   const values = [];
   const processObject = (obj) => {
@@ -39,19 +38,17 @@ async function safeJsonParse(response) {
 // Start flight search
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
-    if (!TOKEN || !MARKER || !HOST) 
-      return res.status(500).json({ error: "API key, marker, or host missing" });
+    if (!TOKEN || !MARKER) return res.status(500).json({ error: "API key or marker missing" });
 
     const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
-    if (!origin || !destination || !departure_at) 
-      return res.status(400).json({ error: "Origin, destination, and departure date are required" });
+    if (!origin || !destination || !departure_at) return res.status(400).json({ error: "Origin, destination, and departure date are required" });
 
     const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
     if (return_at) segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
 
     const signatureParams = {
       marker: MARKER,
-      host: HOST,
+      host: req.headers.host || "localhost",
       user_ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
       locale: "en",
       trip_class: trip_class.toUpperCase(),
@@ -84,7 +81,7 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
     const { searchId } = req.params;
     const { currency = "USD", passengers = 1 } = req.query;
 
-    const maxAttempts = 36; // 3 minutes polling
+    const maxAttempts = 36; // 3 minutes at 5s intervals
     let attempts = 0;
     let proposals = [];
 
@@ -95,14 +92,14 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
 
       const resultsData = await safeJsonParse(resultsResponse);
 
-      // Extract proposals correctly
       if (Array.isArray(resultsData)) proposals = resultsData;
       else if (Array.isArray(resultsData.data)) proposals = resultsData.data;
       else proposals = resultsData.proposals || [];
 
       if (proposals.length > 0) break;
 
-      await new Promise(r => setTimeout(r, 5000)); // wait 5s
+      // Wait 5s before next poll
+      await new Promise(r => setTimeout(r, 5000));
       attempts++;
     }
 
@@ -129,6 +126,6 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
 });
 
 router.get("/health", (req, res) => res.json({ status: "ok" }));
-router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER, hostPresent: !!HOST }));
+router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
 export default router;
