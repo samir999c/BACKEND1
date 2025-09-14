@@ -62,7 +62,7 @@ router.post("/flights", authMiddleware, async (req, res) => {
 
     const paramsForSignature = {
       marker: MARKER,
-      host: "api.travelpayouts.com",
+      host: "www.aviasales.com",
       user_ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
       locale: "en",
       trip_class: trip_class.toUpperCase(),
