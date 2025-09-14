@@ -12,28 +12,20 @@ const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
 //
-// ## CRITICAL FIX ##
-// This function now generates the signature by sorting keys alphabetically,
-// as required by the Travelpayouts documentation to resolve the authentication error.
+// Generate signature required by Travelpayouts
 //
 function generateSignature(params, token) {
   const values = [];
 
-  // This recursive function will process all keys in alphabetical order
   const processObject = (obj) => {
-    // Sort keys alphabetically
     const sortedKeys = Object.keys(obj).sort();
-
     for (const key of sortedKeys) {
       const value = obj[key];
       if (Array.isArray(value)) {
-        // If it's an array of objects (like segments), process each one
         value.forEach(item => processObject(item));
-      } else if (typeof value === 'object' && value !== null) {
-        // If it's a nested object (like passengers), recurse
+      } else if (typeof value === "object" && value !== null) {
         processObject(value);
       } else {
-        // Otherwise, it's a simple value
         values.push(value.toString());
       }
     }
@@ -43,12 +35,12 @@ function generateSignature(params, token) {
 
   const valuesString = values.join(":");
   const stringToHash = `${token}:${valuesString}`;
-
   return crypto.createHash("md5").update(stringToHash).digest("hex");
 }
 
-
-// Helper to safely parse API JSON responses
+//
+// Helper: safely parse API responses
+//
 async function safeJsonParse(response) {
   const text = await response.text();
   if (text.includes("Unauthorized")) {
@@ -62,17 +54,23 @@ async function safeJsonParse(response) {
   }
 }
 
+//
 // Root endpoint
+//
 router.get("/", (req, res) => {
   res.json({ msg: "Welcome to KoalaRoute API!" });
 });
 
+//
 // Dashboard endpoint (protected)
+//
 router.get("/dashboard", authMiddleware, (req, res) => {
   res.json({ msg: "Welcome back!", userId: req.user.id });
 });
 
-// **FIXED**: This endpoint now starts the search and returns the search_id immediately.
+//
+// Start a flight search
+//
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
     if (!TOKEN || !MARKER) {
@@ -112,16 +110,15 @@ router.post("/flights", authMiddleware, async (req, res) => {
     });
 
     if (searchResponse.status >= 400) {
-        const errorData = await safeJsonParse(searchResponse);
-        throw new Error(errorData.error || "Failed to initialize flight search.");
+      const errorData = await safeJsonParse(searchResponse);
+      throw new Error(errorData.error || "Failed to initialize flight search.");
     }
 
     const searchData = await safeJsonParse(searchResponse);
     if (!searchData.search_id) {
-        throw new Error("API did not return a search_id");
+      throw new Error("API did not return a search_id");
     }
 
-    // Immediately return the search_id
     res.json({ search_id: searchData.search_id });
 
   } catch (err) {
@@ -130,27 +127,39 @@ router.post("/flights", authMiddleware, async (req, res) => {
   }
 });
 
-// This endpoint is used by the frontend to poll for results.
+//
+// Poll flight results with auto-retry
+//
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
-    const { currency = "usd", passengers = 1 } = req.query; // Get currency and passengers for final processing
+    const { currency = "usd", passengers = 1 } = req.query;
 
-    const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
-      headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
-    });
+    let attempts = 0;
+    let resultsData = null;
 
-    if (resultsResponse.status >= 400) {
+    while (attempts < 10) { // retry up to 10 times
+      const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
+        headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
+      });
+
+      if (resultsResponse.status >= 400) {
         const errorData = await safeJsonParse(resultsResponse);
         throw new Error(errorData.error || "Failed to fetch flight results.");
-    }
-    
-    const resultsData = await safeJsonParse(resultsResponse);
-    
-    // The final result is an array of flight objects. A pending result is an object with a search_id.
-    if (Array.isArray(resultsData) && (resultsData.length === 0 || !resultsData[0].search_id)) {
-        // Process results with currency conversion before sending
-        const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 }; // Example rates
+      }
+
+      resultsData = await safeJsonParse(resultsResponse);
+
+      // Still searching
+      if (resultsData.status === "pending" || resultsData.search_id) {
+        attempts++;
+        await new Promise(r => setTimeout(r, 2000)); // wait 2 sec
+        continue;
+      }
+
+      // Got final results
+      if (Array.isArray(resultsData)) {
+        const conversionRates = { usd: 1, eur: 0.9, gbp: 0.8 }; // Example conversion
         const processedResults = resultsData.map((flight) => {
           const rate = conversionRates[currency.toLowerCase()] || 1;
           return {
@@ -160,10 +169,12 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
             passengers: parseInt(passengers),
           };
         });
-        res.json({ status: 'complete', data: processedResults });
-    } else {
-        res.json({ status: 'pending' });
+        return res.json({ status: "complete", data: processedResults });
+      }
     }
+
+    // After retries, still pending
+    res.json({ status: "pending", message: "Results not ready yet, try again shortly." });
 
   } catch (err) {
     console.error("Flight Poll Error:", err.message);
@@ -171,7 +182,9 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   }
 });
 
-// Health check and debug endpoints
+//
+// Health check and debug
+//
 router.get("/health", (req, res) => res.json({ status: "ok" }));
 router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
