@@ -11,28 +11,35 @@ const RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
-// Generate signature for Travelpayouts
+// Generate signature required by Travelpayouts
 function generateSignature(params, token) {
   const values = [];
+
   const processObject = (obj) => {
     const sortedKeys = Object.keys(obj).sort();
     for (const key of sortedKeys) {
       const value = obj[key];
-      if (Array.isArray(value)) value.forEach(item => processObject(item));
-      else if (typeof value === "object" && value !== null) processObject(value);
-      else values.push(value.toString());
+      if (Array.isArray(value)) {
+        value.forEach((item) => processObject(item));
+      } else if (typeof value === "object" && value !== null) {
+        processObject(value);
+      } else {
+        values.push(value.toString());
+      }
     }
   };
+
   processObject(params);
   const valuesString = values.join(":");
-  const stringToHash = `${token}:${valuesString}`;
-  return crypto.createHash("md5").update(stringToHash).digest("hex");
+  return crypto.createHash("md5").update(`${token}:${valuesString}`).digest("hex");
 }
 
 // Safely parse API responses
 async function safeJsonParse(response) {
   const text = await response.text();
-  if (text.includes("Unauthorized")) throw new Error("API authentication failed: Unauthorized");
+  if (text.includes("Unauthorized")) {
+    throw new Error("API authentication failed: Unauthorized");
+  }
   try {
     return JSON.parse(text);
   } catch (e) {
@@ -45,16 +52,20 @@ async function safeJsonParse(response) {
 router.get("/", (req, res) => res.json({ msg: "Welcome to KoalaRoute API!" }));
 
 // Dashboard endpoint (protected)
-router.get("/dashboard", authMiddleware, (req, res) => res.json({ msg: "Welcome back!", userId: req.user.id }));
+router.get("/dashboard", authMiddleware, (req, res) => {
+  res.json({ msg: "Welcome back!", userId: req.user.id });
+});
 
-// Start a flight search
+// Start flight search
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
     if (!TOKEN || !MARKER) return res.status(500).json({ error: "API key or marker missing" });
 
     const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
-    if (!origin || !destination || !departure_at)
+
+    if (!origin || !destination || !departure_at) {
       return res.status(400).json({ error: "Origin, destination, and departure date are required" });
+    }
 
     const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
     if (return_at) segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
@@ -87,72 +98,40 @@ router.post("/flights", authMiddleware, async (req, res) => {
 
     // Return search_id immediately
     res.json({ search_id: searchData.search_id });
+
   } catch (err) {
     console.error("Flight Init Error:", err.message);
     res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
-// Poll flight results with retries
+// Poll for flight results
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
-    const { currency = "USD", passengers = 1 } = req.query;
 
-    const MAX_ATTEMPTS = 25;
-    const DELAY = 3000; // 3 seconds
-    let attempts = 0;
-    let resultsData = null;
+    const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
+      headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
+    });
 
-    while (attempts < MAX_ATTEMPTS) {
-      const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
-        headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
-      });
-
-      if (resultsResponse.status >= 400) {
-        const errorData = await safeJsonParse(resultsResponse);
-        throw new Error(errorData.error || "Failed to fetch flight results.");
-      }
-
-      resultsData = await safeJsonParse(resultsResponse);
-      console.log("Attempt", attempts + 1, "Raw Results:", JSON.stringify(resultsData, null, 2));
-
-      // proposals array contains actual flights
-      const flightsArray = Array.isArray(resultsData.proposals) ? resultsData.proposals : [];
-
-      if (flightsArray.length) {
-        // Process flights safely
-        const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
-        const processedResults = flightsArray.map(flight => ({
-          airline: flight.airline || "N/A",
-          departure_at: flight.departure_at || "N/A",
-          return_at: flight.return_at || "N/A",
-          origin: flight.origin || "N/A",
-          destination: flight.destination || "N/A",
-          price: flight.unified_price
-            ? (flight.unified_price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2)
-            : "N/A",
-          currency: currency.toUpperCase(),
-          passengers: parseInt(passengers),
-        }));
-
-        return res.json({ status: "complete", data: processedResults });
-      }
-
-      // No results yet
-      attempts++;
-      await new Promise(r => setTimeout(r, DELAY));
+    if (resultsResponse.status >= 400) {
+      const errorData = await safeJsonParse(resultsResponse);
+      throw new Error(errorData.error || "Failed to fetch flight results.");
     }
 
-    // After max attempts
-    res.json({ status: "pending", message: "Results not ready yet, try again shortly." });
+    const resultsData = await safeJsonParse(resultsResponse);
+
+    // Forward raw results to frontend without guessing
+    // This avoids NaN/empty issues
+    res.json(resultsData);
+
   } catch (err) {
     console.error("Flight Poll Error:", err.message);
     res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
-// Health check
+// Health and debug endpoints
 router.get("/health", (req, res) => res.json({ status: "ok" }));
 router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
