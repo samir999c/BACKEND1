@@ -128,7 +128,7 @@ router.post("/flights", authMiddleware, async (req, res) => {
 });
 
 //
-// Poll flight results with auto-retry
+// Poll flight results with auto-retry and debug logging
 //
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
@@ -150,6 +150,9 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
 
       resultsData = await safeJsonParse(resultsResponse);
 
+      // ✅ DEBUG: log the raw API response
+      console.log("Raw Travelpayouts Results:", JSON.stringify(resultsData, null, 2));
+
       // Still searching
       if (resultsData.status === "pending" || resultsData.search_id) {
         attempts++;
@@ -164,7 +167,9 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
           const rate = conversionRates[currency.toLowerCase()] || 1;
           return {
             ...flight,
-            price: (flight.price * rate * parseInt(passengers)).toFixed(2),
+            price: flight.price
+              ? (flight.price * rate * parseInt(passengers)).toFixed(2)
+              : "N/A",
             currency: currency.toUpperCase(),
             passengers: parseInt(passengers),
           };
