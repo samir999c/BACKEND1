@@ -11,12 +11,9 @@ const RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
-//
 // Generate signature required by Travelpayouts
-//
 function generateSignature(params, token) {
   const values = [];
-
   const processObject = (obj) => {
     const sortedKeys = Object.keys(obj).sort();
     for (const key of sortedKeys) {
@@ -30,17 +27,13 @@ function generateSignature(params, token) {
       }
     }
   };
-
   processObject(params);
-
   const valuesString = values.join(":");
   const stringToHash = `${token}:${valuesString}`;
   return crypto.createHash("md5").update(stringToHash).digest("hex");
 }
 
-//
-// Helper: safely parse API responses
-//
+// Safely parse API responses
 async function safeJsonParse(response) {
   const text = await response.text();
   if (text.includes("Unauthorized")) {
@@ -54,39 +47,26 @@ async function safeJsonParse(response) {
   }
 }
 
-//
 // Root endpoint
-//
-router.get("/", (req, res) => {
-  res.json({ msg: "Welcome to KoalaRoute API!" });
-});
+router.get("/", (req, res) => res.json({ msg: "Welcome to KoalaRoute API!" }));
 
-//
 // Dashboard endpoint (protected)
-//
 router.get("/dashboard", authMiddleware, (req, res) => {
   res.json({ msg: "Welcome back!", userId: req.user.id });
 });
 
-//
 // Start a flight search
-//
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
-    if (!TOKEN || !MARKER) {
-      return res.status(500).json({ error: "Server configuration error: API key or marker missing" });
-    }
+    if (!TOKEN || !MARKER) return res.status(500).json({ error: "API key or marker missing" });
 
     const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
-
     if (!origin || !destination || !departure_at) {
       return res.status(400).json({ error: "Origin, destination, and departure date are required" });
     }
 
     const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
-    if (return_at) {
-      segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
-    }
+    if (return_at) segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
 
     const paramsForSignature = {
       marker: MARKER,
@@ -95,13 +75,10 @@ router.post("/flights", authMiddleware, async (req, res) => {
       locale: "en",
       trip_class: trip_class.toUpperCase(),
       passengers: { adults: parseInt(passengers) || 1, children: 0, infants: 0 },
-      segments: segments,
+      segments,
     };
 
-    const requestPayload = {
-      ...paramsForSignature,
-      signature: generateSignature(paramsForSignature, TOKEN),
-    };
+    const requestPayload = { ...paramsForSignature, signature: generateSignature(paramsForSignature, TOKEN) };
 
     const searchResponse = await fetch(SEARCH_API, {
       method: "POST",
@@ -115,30 +92,25 @@ router.post("/flights", authMiddleware, async (req, res) => {
     }
 
     const searchData = await safeJsonParse(searchResponse);
-    if (!searchData.search_id) {
-      throw new Error("API did not return a search_id");
-    }
+    if (!searchData.search_id) throw new Error("API did not return a search_id");
 
     res.json({ search_id: searchData.search_id });
-
   } catch (err) {
     console.error("Flight Init Error:", err.message);
     res.status(err.message.includes("authentication") ? 401 : 500).json({ error: err.message });
   }
 });
 
-//
-// Poll flight results with auto-retry and debug logging
-//
+// Poll flight results with automatic detection and safe handling
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
-    const { currency = "usd", passengers = 1 } = req.query;
+    const { currency = "USD", passengers = 1 } = req.query;
 
     let attempts = 0;
     let resultsData = null;
 
-    while (attempts < 10) { // retry up to 10 times
+    while (attempts < 10) {
       const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
         headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
       });
@@ -150,32 +122,42 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
 
       resultsData = await safeJsonParse(resultsResponse);
 
-      // ✅ DEBUG: log the raw API response
+      // Log raw results for debugging
       console.log("Raw Travelpayouts Results:", JSON.stringify(resultsData, null, 2));
 
-      // Still searching
-      if (resultsData.status === "pending" || resultsData.search_id) {
-        attempts++;
-        await new Promise(r => setTimeout(r, 2000)); // wait 2 sec
-        continue;
+      // Detect flights array
+      let flightsArray = [];
+      if (Array.isArray(resultsData)) {
+        flightsArray = resultsData;
+      } else if (Array.isArray(resultsData.data)) {
+        flightsArray = resultsData.data;
+      } else if (Array.isArray(resultsData.results)) {
+        flightsArray = resultsData.results;
       }
 
-      // Got final results
-      if (Array.isArray(resultsData)) {
-        const conversionRates = { usd: 1, eur: 0.9, gbp: 0.8 }; // Example conversion
-        const processedResults = resultsData.map((flight) => {
-          const rate = conversionRates[currency.toLowerCase()] || 1;
-          return {
-            ...flight,
-            price: flight.price
-              ? (flight.price * rate * parseInt(passengers)).toFixed(2)
-              : "N/A",
-            currency: currency.toUpperCase(),
-            passengers: parseInt(passengers),
-          };
-        });
-        return res.json({ status: "complete", data: processedResults });
+      // Still searching
+      if (!flightsArray.length) {
+        if (resultsData.status === "pending" || resultsData.search_id) {
+          attempts++;
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
       }
+
+      // Process flights safely
+      const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
+      const processedResults = flightsArray.map(flight => ({
+        airline: flight.airline || "N/A",
+        departure_at: flight.departure_at || "N/A",
+        return_at: flight.return_at || "N/A",
+        origin: flight.origin || "N/A",
+        destination: flight.destination || "N/A",
+        price: flight.price ? (flight.price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2) : "N/A",
+        currency: currency.toUpperCase(),
+        passengers: parseInt(passengers),
+      }));
+
+      return res.json({ status: "complete", data: processedResults });
     }
 
     // After retries, still pending
@@ -187,9 +169,7 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   }
 });
 
-//
 // Health check and debug
-//
 router.get("/health", (req, res) => res.json({ status: "ok" }));
 router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
