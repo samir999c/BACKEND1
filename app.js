@@ -11,10 +11,25 @@ import aviasalesRouter from "./routes/aviasales.js";
 dotenv.config();
 const app = express();
 
-// Middleware
-app.use(cors({ origin: "*", credentials: true }));
+// ## CORRECTED CORS CONFIGURATION FOR PRODUCTION ##
+// This allows requests from your live website.
+const allowedOrigins = [
+  'https://koalarouteai.com',
+  'https://www.koalarouteai.com'
+];
 
-// some chages here
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Routes
@@ -27,13 +42,13 @@ app.use("/api/aviasales", aviasalesRouter);
 // MongoDB connection
 const mongoUri = process.env.MONGO_URI;
 if (!mongoUri) {
-  console.error("❌ MONGO_URI is not defined. Did you set it in Railway?");
+  console.error("❌ MONGO_URI is not defined in your environment variables.");
   process.exit(1);
 }
 
 mongoose
   .connect(mongoUri)
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(() => console.log("✅ MongoDB connected successfully"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 // Start server
