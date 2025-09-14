@@ -11,20 +11,16 @@ const RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
-// Generate signature required by Travelpayouts
+// Generate signature for Travelpayouts
 function generateSignature(params, token) {
   const values = [];
   const processObject = (obj) => {
     const sortedKeys = Object.keys(obj).sort();
     for (const key of sortedKeys) {
       const value = obj[key];
-      if (Array.isArray(value)) {
-        value.forEach(item => processObject(item));
-      } else if (typeof value === "object" && value !== null) {
-        processObject(value);
-      } else {
-        values.push(value.toString());
-      }
+      if (Array.isArray(value)) value.forEach(item => processObject(item));
+      else if (typeof value === "object" && value !== null) processObject(value);
+      else values.push(value.toString());
     }
   };
   processObject(params);
@@ -36,9 +32,7 @@ function generateSignature(params, token) {
 // Safely parse API responses
 async function safeJsonParse(response) {
   const text = await response.text();
-  if (text.includes("Unauthorized")) {
-    throw new Error("API authentication failed: Unauthorized");
-  }
+  if (text.includes("Unauthorized")) throw new Error("API authentication failed: Unauthorized");
   try {
     return JSON.parse(text);
   } catch (e) {
@@ -51,9 +45,7 @@ async function safeJsonParse(response) {
 router.get("/", (req, res) => res.json({ msg: "Welcome to KoalaRoute API!" }));
 
 // Dashboard endpoint (protected)
-router.get("/dashboard", authMiddleware, (req, res) => {
-  res.json({ msg: "Welcome back!", userId: req.user.id });
-});
+router.get("/dashboard", authMiddleware, (req, res) => res.json({ msg: "Welcome back!", userId: req.user.id }));
 
 // Start a flight search
 router.post("/flights", authMiddleware, async (req, res) => {
@@ -101,7 +93,7 @@ router.post("/flights", authMiddleware, async (req, res) => {
   }
 });
 
-// Poll flight results with automatic detection and safe handling
+// Poll flight results using proposals and unified_price
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
@@ -121,27 +113,15 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
       }
 
       resultsData = await safeJsonParse(resultsResponse);
-
-      // Log raw results for debugging
       console.log("Raw Travelpayouts Results:", JSON.stringify(resultsData, null, 2));
 
-      // Detect flights array
-      let flightsArray = [];
-      if (Array.isArray(resultsData)) {
-        flightsArray = resultsData;
-      } else if (Array.isArray(resultsData.data)) {
-        flightsArray = resultsData.data;
-      } else if (Array.isArray(resultsData.results)) {
-        flightsArray = resultsData.results;
-      }
+      // Check proposals array for actual flights
+      const flightsArray = Array.isArray(resultsData.proposals) ? resultsData.proposals : [];
 
-      // Still searching
       if (!flightsArray.length) {
-        if (resultsData.status === "pending" || resultsData.search_id) {
-          attempts++;
-          await new Promise(r => setTimeout(r, 2000));
-          continue;
-        }
+        attempts++;
+        await new Promise(r => setTimeout(r, 3000)); // wait 3 seconds
+        continue;
       }
 
       // Process flights safely
@@ -152,7 +132,9 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
         return_at: flight.return_at || "N/A",
         origin: flight.origin || "N/A",
         destination: flight.destination || "N/A",
-        price: flight.price ? (flight.price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2) : "N/A",
+        price: flight.unified_price
+          ? (flight.unified_price * (conversionRates[currency.toUpperCase()] || 1) * parseInt(passengers)).toFixed(2)
+          : "N/A",
         currency: currency.toUpperCase(),
         passengers: parseInt(passengers),
       }));
@@ -160,7 +142,7 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
       return res.json({ status: "complete", data: processedResults });
     }
 
-    // After retries, still pending
+    // If no flights after retries
     res.json({ status: "pending", message: "Results not ready yet, try again shortly." });
 
   } catch (err) {
@@ -169,7 +151,7 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   }
 });
 
-// Health check and debug
+// Health check and debug endpoints
 router.get("/health", (req, res) => res.json({ status: "ok" }));
 router.get("/debug", (req, res) => res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER }));
 
