@@ -1,4 +1,3 @@
-// backend/routes/koalaroute.js
 import express from "express";
 import fetch from "node-fetch";
 import crypto from "crypto";
@@ -12,16 +11,20 @@ const RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
 
-// Generate Travelpayouts signature
+// Correct signature generation using alphabetical sort
 function generateSignature(params, token) {
   const values = [];
   const processObject = (obj) => {
     const sortedKeys = Object.keys(obj).sort();
     for (const key of sortedKeys) {
       const value = obj[key];
-      if (Array.isArray(value)) value.forEach((item) => processObject(item));
-      else if (typeof value === "object" && value !== null) processObject(value);
-      else values.push(value.toString());
+      if (Array.isArray(value)) {
+        value.forEach(item => processObject(item));
+      } else if (typeof value === 'object' && value !== null) {
+        processObject(value);
+      } else {
+        values.push(value.toString());
+      }
     }
   };
   processObject(params);
@@ -30,73 +33,42 @@ function generateSignature(params, token) {
   return crypto.createHash("md5").update(stringToHash).digest("hex");
 }
 
-// Safe JSON parse helper
+// JSON parsing helper
 async function safeJsonParse(response) {
   const text = await response.text();
-  if (text.includes("Unauthorized"))
-    throw new Error("API authentication failed: Unauthorized");
   try {
     return JSON.parse(text);
   } catch (e) {
-    console.error("Failed to parse JSON. Raw Response:", text);
     throw new Error(`Invalid API response: ${text.substring(0, 150)}...`);
   }
 }
 
-// ✅ Root test
-router.get("/", (req, res) =>
-  res.json({ msg: "Welcome to KoalaRoute API!" })
-);
-
-// ✅ Dashboard (protected)
-router.get("/dashboard", authMiddleware, (req, res) =>
-  res.json({ msg: "Welcome back!", userId: req.user.id })
-);
-
-// ✅ Start flight search
+// --- Endpoint 1: Starts the search and returns a search_id immediately ---
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
-    if (!TOKEN || !MARKER)
-      return res.status(500).json({ error: "API key or marker missing" });
-
-    const {
-      origin,
-      destination,
-      departure_at,
-      return_at,
-      passengers = 1,
-      trip_class = "Y",
-    } = req.body;
-
-    if (!origin || !destination || !departure_at) {
-      return res
-        .status(400)
-        .json({ error: "Origin, destination, and departure date are required" });
+    if (!TOKEN || !MARKER) {
+      return res.status(500).json({ error: "Server configuration error: Missing API credentials" });
     }
 
-    const segments = [
-      {
-        origin: origin.toUpperCase(),
-        destination: destination.toUpperCase(),
-        date: departure_at,
-      },
-    ];
+    const { origin, destination, departure_at, return_at, passengers = 1, trip_class = "Y" } = req.body;
+
+    if (!origin || !destination || !departure_at) {
+      return res.status(400).json({ error: "Missing required search parameters" });
+    }
+
+    const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure_at }];
     if (return_at) {
-      segments.push({
-        origin: destination.toUpperCase(),
-        destination: origin.toUpperCase(),
-        date: return_at,
-      });
+      segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: return_at });
     }
 
     const paramsForSignature = {
       marker: MARKER,
-      host: process.env.AVIASALES_HOST || req.headers.host || "localhost",
-      user_ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
+      host: req.get('host'),
+      user_ip: req.ip,
       locale: "en",
       trip_class: trip_class.toUpperCase(),
       passengers: { adults: parseInt(passengers) || 1, children: 0, infants: 0 },
-      segments,
+      segments: segments,
     };
 
     const requestPayload = {
@@ -106,91 +78,71 @@ router.post("/flights", authMiddleware, async (req, res) => {
 
     const searchResponse = await fetch(SEARCH_API, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Access-Token": TOKEN,
-      },
+      headers: { "Content-Type": "application/json", "X-Access-Token": TOKEN },
       body: JSON.stringify(requestPayload),
     });
 
     const searchData = await safeJsonParse(searchResponse);
+    if (searchResponse.status >= 400) {
+      throw new Error(searchData.error || "Failed to initialize flight search.");
+    }
 
-    if (!searchData.search_id)
+    if (!searchData.search_id) {
       throw new Error("API did not return a search_id");
+    }
 
-    // ✅ Send search_id back to frontend
+    // Immediately return the search_id for the frontend to start polling
     res.json({ search_id: searchData.search_id });
+
   } catch (err) {
     console.error("Flight Init Error:", err.message);
-    res
-      .status(err.message.includes("authentication") ? 401 : 500)
-      .json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ✅ Poll results
+// --- Endpoint 2: Used by the frontend to poll for results ---
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
     const { searchId } = req.params;
-    const { currency = "USD", passengers = 1 } = req.query;
+    const { currency = "usd", passengers = 1 } = req.query;
 
     const resultsResponse = await fetch(`${RESULTS_API}?uuid=${searchId}`, {
-      headers: {
-        "Accept-Encoding": "gzip, deflate",
-        "X-Access-Token": TOKEN,
-      },
+      headers: { "Accept-Encoding": "gzip, deflate", "X-Access-Token": TOKEN },
     });
 
     const resultsData = await safeJsonParse(resultsResponse);
-    console.log(
-      "Raw Travelpayouts Results:",
-      JSON.stringify(resultsData, null, 2)
-    );
-
-    const flightsArray = Array.isArray(resultsData.proposals)
-      ? resultsData.proposals
-      : [];
-
-    if (!flightsArray.length) {
-      return res.json({
-        status: "pending",
-        proposals: [],
-        message: "Results not ready yet, please keep polling.",
-      });
+    if (resultsResponse.status >= 400) {
+      throw new Error(resultsData.error || "Failed to fetch flight results.");
+    }
+    
+    // Check if the response is the final result (an object with a 'proposals' array)
+    if (resultsData && Array.isArray(resultsData.proposals)) {
+        const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 };
+        const processedResults = resultsData.proposals.map((flight) => {
+          const rate = conversionRates[currency.toLowerCase()] || 1;
+          const firstSegment = flight.segment[0];
+          return {
+            price: (flight.unified_price * rate).toFixed(2),
+            currency: currency.toUpperCase(),
+            sign: flight.sign,
+            // Add key details for the frontend to display
+            origin: firstSegment.departure,
+            destination: flight.segment[flight.segment.length - 1].arrival,
+            departure_at: `${firstSegment.departure_date}T${firstSegment.departure_time}`,
+            arrival_at: `${flight.segment[flight.segment.length - 1].arrival_date}T${flight.segment[flight.segment.length - 1].arrival_time}`,
+            marketing_carrier: firstSegment.marketing_carrier
+          };
+        });
+        res.json({ status: 'complete', data: processedResults });
+    } else {
+        // If there is no 'proposals' key, the search is still pending.
+        res.json({ status: 'pending' });
     }
 
-    // ✅ Normalize data so frontend can read proposals
-    const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
-    const proposals = flightsArray.map((flight) => ({
-      airline: flight.airline || "N/A",
-      departure_at: flight.departure_at || "N/A",
-      return_at: flight.return_at || "N/A",
-      origin: flight.origin || "N/A",
-      destination: flight.destination || "N/A",
-      price: flight.unified_price
-        ? (
-            flight.unified_price *
-            (conversionRates[currency.toUpperCase()] || 1) *
-            parseInt(passengers)
-          ).toFixed(2)
-        : "N/A",
-      currency: currency.toUpperCase(),
-      passengers: parseInt(passengers),
-    }));
-
-    return res.json({ status: "complete", proposals });
   } catch (err) {
     console.error("Flight Poll Error:", err.message);
-    res
-      .status(err.message.includes("authentication") ? 401 : 500)
-      .json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
-
-// ✅ Health/debug
-router.get("/health", (req, res) => res.json({ status: "ok" }));
-router.get("/debug", (req, res) =>
-  res.json({ tokenPresent: !!TOKEN, markerPresent: !!MARKER })
-);
 
 export default router;
