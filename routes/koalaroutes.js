@@ -46,6 +46,11 @@ async function safeJsonParse(response) {
 // --- Endpoint 1: Starts the search and returns a search_id immediately ---
 router.post("/flights", authMiddleware, async (req, res) => {
   try {
+    // **CRITICAL CHECK**: Ensure authMiddleware has attached a user object
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication failed. No user found." });
+    }
+
     if (!TOKEN || !MARKER) {
       return res.status(500).json({ error: "Server configuration error: Missing API credentials" });
     }
@@ -91,7 +96,6 @@ router.post("/flights", authMiddleware, async (req, res) => {
       throw new Error("API did not return a search_id");
     }
 
-    // Immediately return the search_id for the frontend to start polling
     res.json({ search_id: searchData.search_id });
 
   } catch (err) {
@@ -103,6 +107,11 @@ router.post("/flights", authMiddleware, async (req, res) => {
 // --- Endpoint 2: Used by the frontend to poll for results ---
 router.get("/flights/:searchId", authMiddleware, async (req, res) => {
   try {
+    // **CRITICAL CHECK**: Ensure authMiddleware has attached a user object
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication failed. No user found." });
+    }
+
     const { searchId } = req.params;
     const { currency = "usd", passengers = 1 } = req.query;
 
@@ -115,7 +124,6 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
       throw new Error(resultsData.error || "Failed to fetch flight results.");
     }
     
-    // Check if the response is the final result (an object with a 'proposals' array)
     if (resultsData && Array.isArray(resultsData.proposals)) {
         const conversionRates = { usd: 0.011, eur: 0.01, gbp: 0.009 };
         const processedResults = resultsData.proposals.map((flight) => {
@@ -125,7 +133,6 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
             price: (flight.unified_price * rate).toFixed(2),
             currency: currency.toUpperCase(),
             sign: flight.sign,
-            // Add key details for the frontend to display
             origin: firstSegment.departure,
             destination: flight.segment[flight.segment.length - 1].arrival,
             departure_at: `${firstSegment.departure_date}T${firstSegment.departure_time}`,
@@ -135,7 +142,6 @@ router.get("/flights/:searchId", authMiddleware, async (req, res) => {
         });
         res.json({ status: 'complete', data: processedResults });
     } else {
-        // If there is no 'proposals' key, the search is still pending.
         res.json({ status: 'pending' });
     }
 
