@@ -7,10 +7,10 @@ dotenv.config();
 
 const router = express.Router();
 
-// Config / endpoints
+// Config
 const TOKEN = process.env.AVIASALES_API_KEY;
 const MARKER = process.env.AVIASALES_MARKER;
-const HOST = process.env.AVIASALES_HOST; // your live frontend/back-end domain
+const HOST = process.env.AVIASALES_HOST; // must match your live domain in Travelpayouts
 const V3_PRICES_API = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates";
 const V1_SEARCH_API = "https://api.travelpayouts.com/v1/flight_search";
 const V1_RESULTS_API = "https://api.travelpayouts.com/v1/flight_search_results";
@@ -23,8 +23,6 @@ function md5(str) {
   return crypto.createHash("md5").update(str).digest("hex");
 }
 
-// Generate signature: recursively collect values in alphabetical key order,
-// flatten arrays/objects, join with ":" and compute md5(token + ":" + joinedValues)
 function generateSignature(params, token) {
   const values = [];
 
@@ -50,41 +48,36 @@ function generateSignature(params, token) {
 function appendMarkerToUrl(url, marker) {
   if (!url) return null;
   try {
-    // attempt to safely add/replace marker query param
     const u = new URL(url);
     u.searchParams.set("marker", marker);
     return u.toString();
   } catch (e) {
-    // fallback: naive append
     return url + (url.includes("?") ? "&" : "?") + `marker=${encodeURIComponent(marker)}`;
   }
 }
 
 function normalizePrice(raw) {
-  // Safely produce a readable price string while avoiding wrong conversions.
-  // Many Travelpayouts fields use "unified_price" in cents — if value >= 1000 assume cents.
   if (raw === null || raw === undefined) return null;
   if (typeof raw === "number") {
-    if (raw > 1000) return (raw / 100).toFixed(2); // assume cents -> dollars
-    return raw.toFixed ? raw.toFixed(2) : String(raw);
+    if (raw > 1000) return (raw / 100).toFixed(2); // assume cents
+    return raw.toFixed(2);
   }
-  // if it's string already
   return String(raw);
 }
 
 /* -------------------------------------------------------------------------- */
-/* Keep existing prices_for_dates endpoint (v3) — useful as fallback/calendar  */
+/* prices_for_dates (fallback/calendar)                                       */
 /* -------------------------------------------------------------------------- */
 
 router.get("/prices", async (req, res) => {
   try {
     if (!TOKEN) {
-      return res.status(500).json({ error: "Server configuration error: API key is not set." });
+      return res.status(500).json({ error: "API key missing" });
     }
 
     const { origin, destination, departure_at, return_at, currency = "usd", limit = 30 } = req.query;
     if (!origin || !destination || !departure_at) {
-      return res.status(400).json({ error: "Missing required query parameters: origin, destination, departure_at" });
+      return res.status(400).json({ error: "Missing required params: origin, destination, departure_at" });
     }
 
     const params = {
@@ -102,12 +95,7 @@ router.get("/prices", async (req, res) => {
 
     const response = await axios.get(V3_PRICES_API, { params });
 
-    if (!response.data || response.data.success !== true) {
-      return res.status(500).json({ error: "API request failed", details: response.data?.error || "Unknown" });
-    }
-
-    // return raw v3 data (frontend may treat it as price-calendar)
-    return res.json({ data: response.data.data });
+    return res.json({ data: response.data.data || [] });
   } catch (err) {
     console.error("Aviasales /prices error:", err.response?.data || err.message);
     return res.status(500).json({ error: "Failed to fetch flight prices", details: err.response?.data || err.message });
@@ -115,23 +103,20 @@ router.get("/prices", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Main flow: v1 flight_search  (initiate)                                    */
-/* POST /aviasales/search                                                     */
-/* body: { origin, destination, departure, returnDate?, passengers?, tripClass?, currency? } */
-/* Returns: { search_id }                                                     */
+/* Initiate search (v1)                                                       */
 /* -------------------------------------------------------------------------- */
 
 router.post("/search", async (req, res) => {
   try {
     if (!TOKEN || !MARKER) {
-      return res.status(500).json({ error: "Server configuration error: API key or marker missing." });
+      return res.status(500).json({ error: "Server config error: missing API key or marker" });
     }
 
     const {
       origin,
       destination,
-      departure,      // YYYY-MM-DD expected
-      returnDate,    // optional
+      departure,
+      returnDate,
       passengers = 1,
       children = 0,
       infants = 0,
@@ -140,20 +125,20 @@ router.post("/search", async (req, res) => {
     } = req.body;
 
     if (!origin || !destination || !departure) {
-      return res.status(400).json({ error: "Origin, destination and departure date are required." });
+      return res.status(400).json({ error: "Origin, destination and departure are required." });
     }
 
-    // prepare segments
-    const segments = [
-      { origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure },
-    ];
+    const segments = [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), date: departure }];
     if (returnDate) {
       segments.push({ origin: destination.toUpperCase(), destination: origin.toUpperCase(), date: returnDate });
     }
 
-    const passengersObj = { adults: parseInt(passengers) || 1, children: parseInt(children) || 0, infants: parseInt(infants) || 0 };
+    const passengersObj = {
+      adults: parseInt(passengers) || 1,
+      children: parseInt(children) || 0,
+      infants: parseInt(infants) || 0,
+    };
 
-    // host must match value registered in Travelpayouts dashboard for signature correctness
     const hostToUse = HOST || req.headers.host || "localhost";
 
     const signatureParams = {
@@ -168,96 +153,73 @@ router.post("/search", async (req, res) => {
 
     const signature = generateSignature(signatureParams, TOKEN);
 
-    const payload = { ...signatureParams, signature };
+    // Travelpayouts expects x-www-form-urlencoded
+    const payload = new URLSearchParams({ ...signatureParams, signature });
 
-    // note: v1 requires X-Access-Token header for authorization
-    const searchResponse = await axios.post(V1_SEARCH_API, payload, {
-      headers: { "Content-Type": "application/json", "X-Access-Token": TOKEN },
+    const searchResponse = await axios.post(V1_SEARCH_API, payload.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
 
-    const searchData = searchResponse.data;
-    const searchId = searchData?.search_id || searchData?.uuid || null;
+    const searchId = searchResponse.data?.search_id || searchResponse.data?.uuid;
     if (!searchId) {
-      console.error("No search_id returned:", searchData);
-      return res.status(500).json({ error: "Failed to initialize search. No search_id returned.", details: searchData });
+      console.error("No search_id returned:", searchResponse.data);
+      return res.status(500).json({ error: "Failed to start search", details: searchResponse.data });
     }
 
     return res.json({ search_id: searchId });
   } catch (err) {
     console.error("Aviasales /search error:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Flight search initialization failed", details: err.response?.data || err.message });
+    return res.status(500).json({ error: "Search init failed", details: err.response?.data || err.message });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* Results endpoint - check v1 results for a given search_id                   */
-/* GET /aviasales/results/:searchId                                           */
-/* Returns: { status: "pending", raw: <api response> }  OR                    */
-/*          { status: "complete", search_id, data: [ { ..processed flight } ] }*/
+/* Get results (v1)                                                           */
 /* -------------------------------------------------------------------------- */
 
 router.get("/results/:searchId", async (req, res) => {
   try {
     const { searchId } = req.params;
-    const currencyRequested = (req.query.currency || "USD").toUpperCase();
-    const passengers = parseInt(req.query.passengers || "1");
-
-    if (!searchId) return res.status(400).json({ error: "searchId required in path" });
-    if (!TOKEN) return res.status(500).json({ error: "Server configuration error: API key missing." });
+    if (!searchId) return res.status(400).json({ error: "searchId required" });
 
     const resultsResponse = await axios.get(V1_RESULTS_API, {
       params: { uuid: searchId },
-      headers: { "X-Access-Token": TOKEN, "Accept-Encoding": "gzip, deflate" },
+      headers: { Accept: "application/json" },
     });
 
     const resultsData = resultsResponse.data;
 
-    // determine proposals array in a few shapes the API might return
     let proposals = [];
     if (Array.isArray(resultsData)) proposals = resultsData;
     else if (Array.isArray(resultsData.data)) proposals = resultsData.data;
     else if (Array.isArray(resultsData.proposals)) proposals = resultsData.proposals;
-    else proposals = resultsData.proposals || [];
 
-    // if still empty -> return pending with raw response (frontend can poll)
     if (!proposals.length) {
       return res.json({ status: "pending", raw: resultsData });
     }
 
-    // process proposals into frontend-friendly structure
-    const conversionRates = { USD: 1, EUR: 0.9, GBP: 0.8 };
-    const rate = conversionRates[currencyRequested] || 1;
-
     const processed = proposals.map((p) => {
-      // try a few common places to find price and link
-      const rawPrice = p.unified_price ?? p.price ?? p.value ?? p.min_price ?? null;
-      const priceDisplay = rawPrice !== null ? normalizePrice(rawPrice * (1) /* do not multiply by passengers here unless you want total */) : null;
-      const currency = p.currency || currencyRequested;
-
-      // booking link - if provided by API, append marker; otherwise leave null
-      const candidateLink = p.link || p.booking_link || p.booking_url || p.site_link || null;
-      const booking_link = candidateLink ? appendMarkerToUrl(candidateLink, MARKER) : null;
+      const rawPrice = p.unified_price ?? p.price ?? p.value ?? null;
+      const price = rawPrice !== null ? normalizePrice(rawPrice) : "N/A";
+      const booking_link = p.link ? appendMarkerToUrl(p.link, MARKER) : null;
 
       return {
         id: p.id || p.search_id || null,
-        airline: p.airline || p.carrier || "Multiple Airlines",
-        origin: p.origin || p.segments?.[0]?.origin || "N/A",
-        destination: p.destination || (p.segments ? p.segments.slice(-1)[0]?.destination : "N/A"),
-        departure_at: p.departure_at || p.departure_time || null,
-        arrival_at: p.arrival_at || p.arrival_time || null,
-        raw_price: rawPrice ?? null,
-        price: priceDisplay ?? "N/A",
-        currency,
-        passengers,
-        booking_link: booking_link, // already contains marker param when possible
-        raw: p, // include raw proposal so frontend can inspect everything if desired
+        airline: p.airline || "Multiple Airlines",
+        origin: p.origin || "N/A",
+        destination: p.destination || "N/A",
+        departure_at: p.departure_at || null,
+        arrival_at: p.arrival_at || null,
+        price,
+        currency: p.currency || "USD",
+        booking_link,
       };
     });
 
     return res.json({ status: "complete", search_id: searchId, data: processed });
   } catch (err) {
     console.error("Aviasales /results error:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Failed to fetch results", details: err.response?.data || err.message });
+    return res.status(500).json({ error: "Results fetch failed", details: err.response?.data || err.message });
   }
 });
 
