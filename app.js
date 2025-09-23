@@ -7,19 +7,16 @@ import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import contactRoutes from "./routes/contact.js";
 import chatRouter from "./app/api/chat/route.js";
-import duffelRoutes from "./routes/duffel.js"; // ADDED: New Duffel router
-
-// REMOVED: Old Aviasales/Koalaroute routers
-// import koalaRoute from "./routes/koalaroutes.js";
-// import aviasalesRouter from "./routes/aviasales.js";
+import duffelRoutes from "./routes/duffel.js"; 
+import koalaRoute from "./routes/koalaroute.js"; // NEW: bring back koalaroute.js
 
 dotenv.config();
 const app = express();
 
 const allowedOrigins = [
-  'https://koalarouteai.com',
-  'https://www.koalarouteai.com',
-  'http://localhost:5173' // Kept for local testing
+  "https://koalarouteai.com",
+  "https://www.koalarouteai.com",
+  "http://localhost:5173" // For local testing
 ];
 const corsOptions = {
   origin: (origin, callback) => {
@@ -39,11 +36,8 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/chat", chatRouter);
-app.use("/api/duffel", duffelRoutes); // ADDED: New Duffel routes are active at /api/duffel
-
-// REMOVED: Old flight search routes
-// app.use("/api/koalaroute", koalaRoute);
-// app.use("/api/aviasales", aviasalesRouter);
+app.use("/api/duffel", duffelRoutes); 
+app.use("/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
 
 // --- MongoDB Connection ---
 const mongoUri = process.env.MONGO_URI;
@@ -62,6 +56,6 @@ mongoose
 
 // --- Server Startup ---
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server is live and listening on port ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server is live and listening on port ${PORT}`);
 });
