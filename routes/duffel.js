@@ -1,55 +1,36 @@
 import express from 'express';
-import cors from 'cors';
-import 'dotenv/config';
 import { Duffel } from '@duffel/api';
+import 'dotenv/config';
 
-const app = express();
+const router = express.Router();
 
-// --- CORS Configuration ---
-const allowedOrigins = [
-  'https://koalarouteai.com',
-  'https://www.koalarouteai.com',
-  'http://localhost:5173'
-];
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-};
-app.use(cors(corsOptions));
-app.use(express.json());
-
-// --- Duffel API Client ---
+// Initialize the Duffel client with your secret API key
 const duffel = new Duffel({
   token: process.env.DUFFEL_ACCESS_TOKEN,
 });
 
-
-// --- API Routes ---
-
-// STEP 1: Search for offers (no payment involved)
-app.post('/api/search', async (req, res) => {
+// Endpoint 1: Search for flights
+router.post('/search', async (req, res) => {
   try {
     const { origin, destination, departure_date } = req.body;
 
+    // Create a request for flight offers from Duffel
     const offerRequest = await duffel.offerRequests.create({
       slices: [{
         origin: origin,
         destination: destination,
         departure_date: departure_date,
       }],
-      passengers: [{ type: 'adult' }],
+      passengers: [{ type: 'adult' }], // Defaulting to 1 adult passenger
       cabin_class: 'economy',
     });
     
+    // Retrieve the flight offers for that request
     const response = await duffel.offers.list({
       offer_request_id: offerRequest.data.id,
     });
     
+    // Send the flight offers back to the frontend
     res.json({ data: response.data });
 
   } catch (error) {
@@ -58,16 +39,17 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// STEP 2: Create a secure link (Duffel handles the payment)
-app.post('/api/create-link', async (req, res) => {
+// Endpoint 2: Create a Duffel Link for booking
+router.post('/create-link', async (req, res) => {
   try {
     const { offer_id } = req.body;
     
+    // Create the unique Duffel Link for the chosen flight offer
     const duffelLink = await duffel.links.create({
       offer_id: offer_id,
     });
 
-    // We only send back the URL. Duffel handles everything else.
+    // Send the unique booking URL back to the frontend
     res.json({ url: duffelLink.data.url });
 
   } catch (error) {
@@ -76,9 +58,4 @@ app.post('/api/create-link', async (req, res) => {
   }
 });
 
-
-// --- Server Startup ---
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server is live and listening on port ${PORT}`);
-});
+export default router;
