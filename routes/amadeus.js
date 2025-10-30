@@ -5,14 +5,11 @@ import cors from "cors";
 
 const router = express.Router();
 
-// // CORS Middleware
-router.use(
-  cors({
-    // origin: process.env.FRONTEND_URL || "http://localhost:5000",
-    origin: process.env.FRONTEND_URL,
-    credentials: true,
-  })
-);
+// =============================================
+//  FIX 1: Simpler, more open CORS setting
+// =============================================
+// This allows all origins and will fix browser CORS errors.
+router.use(cors());
 
 // ========== Helper: Get Amadeus Token ==========
 async function getAccessToken() {
@@ -30,13 +27,15 @@ async function getAccessToken() {
   );
 
   const data = await res.json();
-  if (!res.ok)
+  if (!res.ok) {
+    console.error("Failed to get Amadeus token:", data);
     throw new Error(data.error_description || "Failed to get Amadeus token");
+  }
   return data.access_token;
 }
 
 /* =====================================================
-   ✈️ 1. FLIGHT BOOKING SECTION
+    ✈️ 1. FLIGHT BOOKING SECTION
 ===================================================== */
 
 // 1. Flight Offers Search
@@ -61,11 +60,21 @@ router.post("/flight-offers", async (req, res) => {
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
 
-    if (!response.ok) return res.status(400).json({ error: data });
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Flight Offers):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Flight Offers):", err.message);
     res.status(500).json({ msg: "Flight search failed", error: err.message });
   }
 });
@@ -92,9 +101,19 @@ router.post("/flight-offers/price", async (req, res) => {
     );
 
     const data = await response.json();
-    if (!response.ok) return res.status(400).json({ error: data });
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Price):", data);
+      return res.status(response.status).json(data);
+    }
+
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Price):", err.message);
     res.status(500).json({ msg: "Price check failed", error: err.message });
   }
 });
@@ -131,7 +150,7 @@ router.post("/book", async (req, res) => {
                   phones: [
                     {
                       deviceType: "MOBILE",
-                      countryCallingCode: "1",
+                      countryCallingCode: "1", // You might want to make this dynamic
                       number: travelerInfo.phone,
                     },
                   ],
@@ -154,15 +173,25 @@ router.post("/book", async (req, res) => {
     );
 
     const data = await response.json();
-    if (!response.ok) return res.status(400).json({ error: data });
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Book):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Book):", err.message);
     res.status(500).json({ msg: "Booking failed", error: err.message });
   }
 });
 
 /* =====================================================
-   💡 2. FLIGHT INSPIRATION SECTION
+    💡 2. FLIGHT INSPIRATION SECTION
 ===================================================== */
 
 // 1. Flight Inspiration Search
@@ -171,12 +200,25 @@ router.get("/flight-inspiration", async (req, res) => {
     const token = await getAccessToken();
     const { origin } = req.query;
     const url = `https://test.api.amadeus.com/v1/shopping/flight-destinations?origin=${origin}`;
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Inspiration):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Inspiration):", err.message);
     res
       .status(500)
       .json({ msg: "Inspiration search failed", error: err.message });
@@ -189,12 +231,25 @@ router.get("/flight-cheapest", async (req, res) => {
     const token = await getAccessToken();
     const { origin, destination } = req.query;
     const url = `https://test.api.amadeus.com/v1/shopping/flight-dates?origin=${origin}&destination=${destination}`;
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Cheapest):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Cheapest):", err.message);
     res
       .status(500)
       .json({ msg: "Cheapest date search failed", error: err.message });
@@ -202,7 +257,7 @@ router.get("/flight-cheapest", async (req, res) => {
 });
 
 /* =====================================================
-   🕒 3. FLIGHT SCHEDULE SECTION
+    🕒 3. FLIGHT SCHEDULE SECTION
 ===================================================== */
 
 // 1. On Demand Flight Status
@@ -212,38 +267,70 @@ router.get("/flight-status", async (req, res) => {
     const { carrierCode, flightNumber, scheduledDepartureDate } = req.query;
 
     const url = `https://test.api.amadeus.com/v2/schedule/flights?carrierCode=${carrierCode}&flightNumber=${flightNumber}&scheduledDepartureDate=${scheduledDepartureDate}`;
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Status):", data);
+      return res.status(response.status).json(data);
+    }
+
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Status):", err.message);
     res.status(500).json({ msg: "Flight status failed", error: err.message });
   }
 });
 
 /* =====================================================
-   🏙️ 4. AIRPORT SECTION
+    🏙️ 4. AIRPORT SECTION
 ===================================================== */
 
 // 1. Airport and City Search
 router.get("/airport-search", async (req, res) => {
   try {
-    const token = await getAccessToken();
     const { keyword } = req.query;
+    if (!keyword || keyword.length < 2) {
+      return res.status(400).json({ msg: "Search keyword must be at least 2 characters." });
+    }
+    
+    const token = await getAccessToken();
+    
     const url = `https://test.api.amadeus.com/v1/reference-data/locations?subType=AIRPORT,CITY&keyword=${keyword}`;
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling (This is the critical one for you)
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Airport Search):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    // This will catch errors from getAccessToken() (e.g. bad .env)
+    console.error("Backend Error (Airport Search):", err.message);
     res.status(500).json({ msg: "Airport search failed", error: err.message });
   }
 });
 
 /* =====================================================
-   🛩️ 5. AIRLINES SECTION
+    🛩️ 5. AIRLINES SECTION
 ===================================================== */
 
 // 1. Airline Code Lookup
@@ -252,12 +339,25 @@ router.get("/airline", async (req, res) => {
     const token = await getAccessToken();
     const { airlineCode } = req.query;
     const url = `https://test.api.amadeus.com/v1/reference-data/airlines?airlineCodes=${airlineCode}`;
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Airline):", data);
+      return res.status(response.status).json(data);
+    }
+    
     res.json(data);
+
   } catch (err) {
+    console.error("Backend Error (Airline):", err.message);
     res.status(500).json({ msg: "Airline lookup failed", error: err.message });
   }
 });
