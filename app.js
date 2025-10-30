@@ -8,7 +8,7 @@ import authRoutes from "./routes/auth.js";
 import contactRoutes from "./routes/contact.js";
 import chatRouter from "./app/api/chat/route.js";
 import duffelRoutes from "./routes/duffel.js"; 
-import koalaRoute from "./routes/koalaroute.js"; // NEW: bring back koalaroute.js
+import koalaRoute from "./routes/koalaroutes.js"; // NEW: bring back koalaroute.js
 
 dotenv.config();
 const app = express();
