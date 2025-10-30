@@ -3,28 +3,16 @@ import fetch from "node-fetch";
 import "dotenv/config";
 import cors from "cors";
 
-const app = express(); // Use 'app' instead of 'router' for the main export
 const router = express.Router();
 
 // =============================================
-//  THE CORS FIX
+//  FIX 1: Simpler, more open CORS setting
 // =============================================
-// We apply CORS to the 'app' itself, which Vercel will use.
-// This is a more robust setting that allows your frontend URL.
-const corsOptions = {
-  origin: process.env.FRONTEND_URL || "https://koalarouteai.com",
-  credentials: true,
-};
-app.use(cors(corsOptions));
-// Also enable pre-flight requests for all routes
-app.options('*', cors(corsOptions)); 
-
-// Parse JSON bodies
-app.use(express.json());
+// This allows all origins and will fix browser CORS errors.
+router.use(cors());
 
 // ========== Helper: Get Amadeus Token ==========
 async function getAccessToken() {
-  // ... (Your getAccessToken function is fine, no changes needed)
   const res = await fetch(
     "https://test.api.amadeus.com/v1/security/oauth2/token",
     {
@@ -37,6 +25,7 @@ async function getAccessToken() {
       }),
     }
   );
+
   const data = await res.json();
   if (!res.ok) {
     console.error("Failed to get Amadeus token:", data);
@@ -45,38 +34,19 @@ async function getAccessToken() {
   return data.access_token;
 }
 
-// =====================================================
-//  ALL YOUR ROUTES (with robust error handling)
-// =====================================================
+/* =====================================================
+    ✈️ 1. FLIGHT BOOKING SECTION
+===================================================== */
 
-// 1. Airport and City Search (The one that is failing)
-router.get("/airport-search", async (req, res) => {
-  try {
-    const { keyword } = req.query;
-    if (!keyword || keyword.length < 2) {
-      return res.status(400).json({ msg: "Search keyword must be at least 2 characters." });
-    }
-    const token = await getAccessToken();
-    const url = `https://test.api.amadeus.com/v1/reference-data/locations?subType=AIRPORT,CITY&keyword=${keyword}`;
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Amadeus API Error (Airport Search):", data);
-      return res.status(response.status).json(data);
-    }
-    res.json(data);
-  } catch (err) {
-    console.error("Backend Error (Airport Search):", err.message);
-    res.status(500).json({ msg: "Airport search failed", error: err.message });
-  }
-});
-
-// 2. Flight Offers Search
+// 1. Flight Offers Search
 router.post("/flight-offers", async (req, res) => {
   try {
     const { origin, destination, departureDate, returnDate, adults } = req.body;
     const token = await getAccessToken();
-    const url = new URL("https://test.api.amadeus.com/v2/shopping/flight-offers");
+
+    const url = new URL(
+      "https://test.api.amadeus.com/v2/shopping/flight-offers"
+    );
     url.search = new URLSearchParams({
       originLocationCode: origin,
       destinationLocationCode: destination,
@@ -86,98 +56,310 @@ router.post("/flight-offers", async (req, res) => {
       currencyCode: "USD",
       max: 5,
     });
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
     if (!response.ok) {
       console.error("Amadeus API Error (Flight Offers):", data);
       return res.status(response.status).json(data);
     }
+    
     res.json(data);
+
   } catch (err) {
     console.error("Backend Error (Flight Offers):", err.message);
     res.status(500).json({ msg: "Flight search failed", error: err.message });
   }
 });
 
-// 3. Flight Offers Price
+// 2. Flight Offers Price
 router.post("/flight-offers/price", async (req, res) => {
   try {
     const token = await getAccessToken();
-    const response = await fetch("https://test.api.amadeus.com/v1/shopping/flight-offers/pricing", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ data: { type: "flight-offers-pricing", flightOffers: req.body.flightOffers } }),
-    });
+    const response = await fetch(
+      "https://test.api.amadeus.com/v1/shopping/flight-offers/pricing",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "flight-offers-pricing",
+            flightOffers: req.body.flightOffers,
+          },
+        }),
+      }
+    );
+
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
     if (!response.ok) {
       console.error("Amadeus API Error (Price):", data);
       return res.status(response.status).json(data);
     }
+
     res.json(data);
+
   } catch (err) {
     console.error("Backend Error (Price):", err.message);
     res.status(500).json({ msg: "Price check failed", error: err.message });
   }
 });
 
-// 4. Create Flight Orders (Booking)
+// 3. Create Flight Orders (Booking)
 router.post("/book", async (req, res) => {
   try {
     const { flightOffer, travelerInfo } = req.body;
     const token = await getAccessToken();
-    const response = await fetch("https://test.api.amadeus.com/v1/booking/flight-orders", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: {
-          type: "flight-order",
-          flightOffers: [flightOffer],
-          travelers: [
-            {
-              id: "1",
-              dateOfBirth: travelerInfo.dateOfBirth,
-              name: { firstName: travelerInfo.firstName, lastName: travelerInfo.lastName },
-              gender: travelerInfo.gender,
-              contact: {
-                emailAddress: travelerInfo.email,
-                phones: [{ deviceType: "MOBILE", countryCallingCode: "1", number: travelerInfo.phone }],
-              },
-              documents: [
-                {
-                  documentType: "PASSPORT",
-                  number: travelerInfo.passportNumber,
-                  expiryDate: travelerInfo.passportExpiry,
-                  issuanceCountry: travelerInfo.passportCountry,
-                  nationality: travelerInfo.passportCountry,
-                  holder: true,
-                },
-              ],
-            },
-          ],
+
+    const response = await fetch(
+      "https://test.api.amadeus.com/v1/booking/flight-orders",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          data: {
+            type: "flight-order",
+            flightOffers: [flightOffer],
+            travelers: [
+              {
+                id: "1",
+                dateOfBirth: travelerInfo.dateOfBirth,
+                name: {
+                  firstName: travelerInfo.firstName,
+                  lastName: travelerInfo.lastName,
+                },
+                gender: travelerInfo.gender,
+                contact: {
+                  emailAddress: travelerInfo.email,
+                  phones: [
+                    {
+                      deviceType: "MOBILE",
+                      countryCallingCode: "1", // You might want to make this dynamic
+                      number: travelerInfo.phone,
+                    },
+                  ],
+                },
+                documents: [
+                  {
+                    documentType: "PASSPORT",
+                    number: travelerInfo.passportNumber,
+                    expiryDate: travelerInfo.passportExpiry,
+                    issuanceCountry: travelerInfo.passportCountry,
+                    nationality: travelerInfo.passportCountry,
+                    holder: true,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      }
+    );
+
     const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
     if (!response.ok) {
       console.error("Amadeus API Error (Book):", data);
       return res.status(response.status).json(data);
     }
+    
     res.json(data);
+
   } catch (err) {
     console.error("Backend Error (Book):", err.message);
     res.status(500).json({ msg: "Booking failed", error: err.message });
   }
 });
 
-// ... (Your other routes: inspiration, cheapest, status, airline)
-// ... (I've omitted them for brevity, but they should also be inside the router)
+/* =====================================================
+    💡 2. FLIGHT INSPIRATION SECTION
+===================================================== */
 
+// 1. Flight Inspiration Search
+router.get("/flight-inspiration", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { origin } = req.query;
+    const url = `https://test.api.amadeus.com/v1/shopping/flight-destinations?origin=${origin}`;
+    
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
+    const data = await response.json();
 
-// =====================================================
-//  FINAL STEP: Mount the router and export the app
-// =====================================================
-// We mount all our API routes under the '/amadeus' prefix
-app.use("/amadeus", router);
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Inspiration):", data);
+      return res.status(response.status).json(data);
+    }
+    
+    res.json(data);
 
-// This is the default export for Vercel
-export default app;
+  } catch (err) {
+    console.error("Backend Error (Inspiration):", err.message);
+    res
+      .status(500)
+      .json({ msg: "Inspiration search failed", error: err.message });
+  }
+});
+
+// 2. Flight Cheapest Date Search
+router.get("/flight-cheapest", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { origin, destination } = req.query;
+    const url = `https://test.api.amadeus.com/v1/shopping/flight-dates?origin=${origin}&destination=${destination}`;
+    
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
+    const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Cheapest):", data);
+      return res.status(response.status).json(data);
+    }
+    
+    res.json(data);
+
+  } catch (err) {
+    console.error("Backend Error (Cheapest):", err.message);
+    res
+      .status(500)
+      .json({ msg: "Cheapest date search failed", error: err.message });
+  }
+});
+
+/* =====================================================
+    🕒 3. FLIGHT SCHEDULE SECTION
+===================================================== */
+
+// 1. On Demand Flight Status
+router.get("/flight-status", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { carrierCode, flightNumber, scheduledDepartureDate } = req.query;
+
+    const url = `https://test.api.amadeus.com/v2/schedule/flights?carrierCode=${carrierCode}&flightNumber=${flightNumber}&scheduledDepartureDate=${scheduledDepartureDate}`;
+    
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
+    const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Status):", data);
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data);
+
+  } catch (err) {
+    console.error("Backend Error (Status):", err.message);
+    res.status(500).json({ msg: "Flight status failed", error: err.message });
+  }
+});
+
+/* =====================================================
+    🏙️ 4. AIRPORT SECTION
+===================================================== */
+
+// 1. Airport and City Search
+router.get("/airport-search", async (req, res) => {
+  try {
+    const { keyword } = req.query;
+    if (!keyword || keyword.length < 2) {
+      return res.status(400).json({ msg: "Search keyword must be at least 2 characters." });
+    }
+    
+    const token = await getAccessToken();
+    
+    const url = `https://test.api.amadeus.com/v1/reference-data/locations?subType=AIRPORT,CITY&keyword=${keyword}`;
+    
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
+    const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling (This is the critical one for you)
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Airport Search):", data);
+      return res.status(response.status).json(data);
+    }
+    
+    res.json(data);
+
+  } catch (err) {
+    // This will catch errors from getAccessToken() (e.g. bad .env)
+    console.error("Backend Error (Airport Search):", err.message);
+    res.status(500).json({ msg: "Airport search failed", error: err.message });
+  }
+});
+
+/* =====================================================
+    🛩️ 5. AIRLINES SECTION
+===================================================== */
+
+// 1. Airline Code Lookup
+router.get("/airline", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { airlineCode } = req.query;
+    const url = `https://test.api.amadeus.com/v1/reference-data/airlines?airlineCodes=${airlineCode}`;
+    
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    
+    const data = await response.json();
+
+    // =============================================
+    //  FIX 2: Robust Error Handling
+    // =============================================
+    if (!response.ok) {
+      console.error("Amadeus API Error (Airline):", data);
+      return res.status(response.status).json(data);
+    }
+    
+    res.json(data);
+
+  } catch (err) {
+    console.error("Backend Error (Airline):", err.message);
+    res.status(500).json({ msg: "Airline lookup failed", error: err.message });
+  }
+});
+
+export default router;
