@@ -6,7 +6,7 @@ import cors from "cors";
 // --- Route Imports ---
 import authRoutes from "./routes/auth.js";
 import contactRoutes from "./routes/contact.js";
-import chatRouter from "./app/api/chat/route.js";
+import chatRouter from "./app/api/chat/route.js";"1"
 import duffelRoutes from "./routes/amadeus.js"; 
 import koalaRoute from "./routes/koalaroutes.js"; // NEW: bring back koalaroute.js
 
