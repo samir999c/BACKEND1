@@ -8,7 +8,7 @@ import authRoutes from "./routes/auth.js";
 import contactRoutes from "./routes/contact.js";
 import chatRouter from "./app/api/chat/route.js";"1"
 import duffelRoutes from "./routes/amadeus.js"; 
-import koalaRoute from "./routes/koalaroutes.js"; // NEW: bring back koalaroute.js
+// import koalaRoute from "./routes/koalaroutes.js"; // NEW: bring back koalaroute.js
 
 dotenv.config();
 const app = express();
@@ -36,8 +36,8 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/chat", chatRouter);
-app.use("/api/duffel", duffelRoutes); 
-app.use("/api/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
+app.use("/api", duffelRoutes); 
+// app.use("/api/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
 
 // --- MongoDB Connection ---
 const mongoUri = process.env.MONGO_URI;
