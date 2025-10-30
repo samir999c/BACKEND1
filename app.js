@@ -37,7 +37,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/chat", chatRouter);
 app.use("/api/duffel", duffelRoutes); 
-app.use("/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
+app.use("/api/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
 
 // --- MongoDB Connection ---
 const mongoUri = process.env.MONGO_URI;
