@@ -1,10 +1,12 @@
-// src/routes/amadeus.js
 import express from "express";
 import fetch from "node-fetch";
 import "dotenv/config";
 import cors from "cors";
 
 const router = express.Router();
+
+// Enable CORS
+router.use(cors());
 
 // ========== Helper: Get Amadeus Token ==========
 async function getAccessToken() {
@@ -34,7 +36,7 @@ async function getAccessToken() {
 }
 
 // =====================================================
-//  ALL YOUR ROUTES WITH ROBUST ERROR HANDLING
+//  ROUTES
 // =====================================================
 
 // 1. Airport and City Search
@@ -109,10 +111,14 @@ router.post("/flight-offers/price", async (req, res) => {
 });
 
 // 4. Create Flight Orders (Booking)
+// =============================================
+//  THIS IS THE FIXED ROUTE
+// =============================================
 router.post("/book", async (req, res) => {
   try {
     const { flightOffer, travelerInfo } = req.body;
     const token = await getAccessToken();
+    
     const response = await fetch("https://test.api.amadeus.com/v1/booking/flight-orders", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -142,16 +148,19 @@ router.post("/book", async (req, res) => {
               ],
             },
           ],
+          // --- START OF CRITICAL FIX ---
+          // Amadeus Test API requires dummy payment
           "payments": [
             {
               "method": "CREDIT_CARD",
               "card": {
-                "vendorCode": "VI",
-                "cardNumber": "4111111111111111",
-                "expiryDate": "2030-01"
+                "vendorCode": "VI", // VI for Visa, CA for MasterCard
+                "cardNumber": "4111111111111111", // Amadeus test card
+                "expiryDate": "2030-01" // Any future date
               }
             }
           ],
+          // Amadeus also requires a ticketing contact
           "ticketingContact": {
             "contact": {
               "emailAddress": travelerInfo.email,
@@ -168,9 +177,11 @@ router.post("/book", async (req, res) => {
               "lastName": travelerInfo.lastName
             }
           }
+          // --- END OF CRITICAL FIX ---
         },
       }),
     });
+
     const data = await response.json();
     if (!response.ok) {
       console.error("Amadeus Booking Error:", data);
@@ -183,11 +194,64 @@ router.post("/book", async (req, res) => {
   }
 });
 
+
 // ... (Your other routes: inspiration, cheapest, status, airline) ...
-// (Omitting them for brevity, but they should be here)
+router.get("/flight-inspiration", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { origin } = req.query;
+    const url = `https://test.api.amadeus.com/v1/shopping/flight-destinations?origin=${origin}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await response.json();
+    if (!response.ok) { return res.status(response.status).json(data); }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ msg: "Inspiration search failed", error: err.message });
+  }
+});
+
+router.get("/flight-cheapest", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { origin, destination } = req.query;
+    const url = `https://test.api.amadeus.com/v1/shopping/flight-dates?origin=${origin}&destination=${destination}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await response.json();
+    if (!response.ok) { return res.status(response.status).json(data); }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ msg: "Cheapest date search failed", error: err.message });
+  }
+});
+
+router.get("/flight-status", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { carrierCode, flightNumber, scheduledDepartureDate } = req.query;
+    const url = `https://test.api.amadeus.com/v2/schedule/flights?carrierCode=${carrierCode}&flightNumber=${flightNumber}&scheduledDepartureDate=${scheduledDepartureDate}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await response.json();
+    if (!response.ok) { return res.status(response.status).json(data); }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ msg: "Flight status failed", error: err.message });
+  }
+});
+
+router.get("/airline", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const { airlineCode } = req.query;
+    const url = `https://test.api.amadeus.com/v1/reference-data/airlines?airlineCodes=${airlineCode}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await response.json();
+    if (!response.ok) { return res.status(response.status).json(data); }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ msg: "Airline lookup failed", error: err.message });
+  }
+});
 
 
-// =====================================================
-//  THE FIX FOR THE SYNTAX ERROR
-// =====================================================
+// This is the line that fixes your server startup crash
 export default router;
