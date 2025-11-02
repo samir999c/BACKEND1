@@ -6,17 +6,25 @@ import cors from "cors";
 // --- Route Imports ---
 import authRoutes from "./routes/auth.js";
 import contactRoutes from "./routes/contact.js";
-import chatRouter from "./app/api/chat/route.js";"1"
-import duffelRoutes from "./routes/amadeus.js"; 
-// import koalaRoute from "./routes/koalaroutes.js"; // NEW: bring back koalaroute.js
+import chatRouter from "./app/api/chat/route.js";
+import amadeusRoutes from "./routes/amadeus.js"; // Renamed for clarity
+// import koalaRoute from "./routes/koalaroutes.js"; 
 
 dotenv.config();
 const app = express();
 
+// =====================================================
+//  THIS IS THE FIX FOR THE VALIDATIONERROR
+//  It tells Express to trust Render's proxy
+// =====================================================
+app.set('trust proxy', 1);
+
+
+// --- CORS Configuration ---
 const allowedOrigins = [
   "https://koalarouteai.com",
   "https://www.koalarouteai.com",
-  "http://localhost:5173" // For local testing
+  "http://localhost:5173" 
 ];
 const corsOptions = {
   origin: (origin, callback) => {
@@ -29,6 +37,9 @@ const corsOptions = {
   credentials: true
 };
 
+// This handles the "pre-flight" OPTIONS request
+app.options('*', cors(corsOptions));
+
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -36,8 +47,8 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/chat", chatRouter);
-app.use("/api/duffel", duffelRoutes); 
-// app.use("/api/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
+app.use("/api", amadeusRoutes); // All Amadeus routes are at /api
+// app.use("/api/koalaroute", koalaRoute); 
 
 // --- MongoDB Connection ---
 const mongoUri = process.env.MONGO_URI;
