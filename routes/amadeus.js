@@ -5,13 +5,11 @@ import cors from "cors";
 
 const router = express.Router();
 
-// This file assumes your main app.js is already using cors()
-// but adding it here provides an extra layer of safety.
+// Enable CORS
 router.use(cors());
 
 // ========== Helper: Get Amadeus Token ==========
 async function getAccessToken() {
-  // This function will fail if .env variables are missing on your server
   try {
     const res = await fetch(
       "https://test.api.amadeus.com/v1/security/oauth2/token",
@@ -32,13 +30,13 @@ async function getAccessToken() {
     }
     return data.access_token;
   } catch (err) {
-    console.error("CRITICAL: getAccessToken failed. Check .env variables.", err.message);
+    console.error("CRITICAL: getAccessToken failed.", err.message);
     throw new Error("Auth token failed");
   }
 }
 
 // =====================================================
-//  API ROUTES
+//  ROUTES
 // =====================================================
 
 // 1. Airport and City Search
@@ -63,54 +61,28 @@ router.get("/airport-search", async (req, res) => {
   }
 });
 
-// 2. Flight Offers Search (UPDATED)
+// 2. Flight Offers Search
 router.post("/flight-offers", async (req, res) => {
   try {
-    const { 
-      origin, 
-      destination, 
-      departureDate, 
-      returnDate, 
-      adults,
-      children,       // NEW
-      travelClass     // NEW
-    } = req.body;
-
+    const { origin, destination, departureDate, returnDate, adults } = req.body;
     const token = await getAccessToken();
     const url = new URL("https://test.api.amadeus.com/v2/shopping/flight-offers");
-    
-    // Build search params
-    const searchParams = {
+    url.search = new URLSearchParams({
       originLocationCode: origin,
       destinationLocationCode: destination,
-      departureDate: departureDate,
-      adults: adults,
+      departureDate,
+      ...(returnDate && { returnDate }),
+      adults: adults || 1,
       currencyCode: "USD",
-      max: 10,
-    };
-
-    // Conditionally add new params if they exist
-    if (returnDate) {
-      searchParams.returnDate = returnDate;
-    }
-    if (children > 0) {
-      searchParams.children = children;
-    }
-    if (travelClass) {
-      searchParams.travelClass = travelClass;
-    }
-
-    url.search = new URLSearchParams(searchParams);
-
+      max: 5,
+    });
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const data = await response.json();
-    
     if (!response.ok) {
       console.error("Amadeus API Error (Flight Offers):", data);
       return res.status(response.status).json(data);
     }
     res.json(data);
-    
   } catch (err) {
     console.error("Backend Error (Flight Offers):", err.message);
     res.status(500).json({ msg: "Flight search failed", error: err.message });
@@ -138,14 +110,15 @@ router.post("/flight-offers/price", async (req, res) => {
   }
 });
 
-// 4. Create Flight Orders (Booking) (UPDATED)
+// 4. Create Flight Orders (Booking)
+// =============================================
+//  THIS IS THE FIXED ROUTE
+// =============================================
 router.post("/book", async (req, res) => {
   try {
     const { flightOffer, travelerInfo } = req.body;
     const token = await getAccessToken();
     
-    // Note: This only supports 1 traveler. You will need to update this logic
-    // if you want to support multiple travelers (adults + children)
     const response = await fetch("https://test.api.amadeus.com/v1/booking/flight-orders", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -222,7 +195,7 @@ router.post("/book", async (req, res) => {
 });
 
 
-// 5. Other Routes (Inspiration, Cheapest, etc.)
+// ... (Your other routes: inspiration, cheapest, status, airline) ...
 router.get("/flight-inspiration", async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -280,8 +253,5 @@ router.get("/airline", async (req, res) => {
 });
 
 
-// =====================================================
-//  THE FIX FOR YOUR SERVER CRASH
-//  This line MUST be at the very bottom of the file
-// =====================================================
+// This is the line that fixes your server startup crash
 export default router;
