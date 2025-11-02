@@ -36,7 +36,7 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/chat", chatRouter);
-app.use("/api", duffelRoutes); 
+app.use("/api/duffel", duffelRoutes); 
 // app.use("/api/koalaroute", koalaRoute); // ✅ Now /koalaroute/dashboard works again
 
 // --- MongoDB Connection ---
